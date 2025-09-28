@@ -58,11 +58,17 @@ oc start-build nfs-home-webhook --from-dir=. -n nfs-home-system --wait --follow
 oc apply -f k8s/deployment-ocp.yaml
 ```
 
-Notes:
-- The `Service` annotation `service.beta.openshift.io/serving-cert-secret-name: webhook-server-cert` makes OpenShift create the TLS secret with keys `tls.crt` and `tls.key`.
-- The `MutatingWebhookConfiguration` has `service.beta.openshift.io/inject-cabundle: "true"` so OpenShift injects the cluster CA into `caBundle`.
-- The `Deployment` uses a `ServiceAccount` and securityContext compatible with the restricted SCC (non-root, no privilege escalation, drop all capabilities).
-- You do NOT need to run `scripts/generate-certs.sh` on OpenShift.
+## Configuration
+
+Environment variables supported by the webhook:
+
+- TARGET_LABEL_KEY: default `nfs-home`
+- TARGET_LABEL_VALUE: default `true`
+- REWRITE_FROM: default `/home`
+- REWRITE_TO: default `/blah/home`
+- LOG_LEVEL: default `INFO` (one of `DEBUG, INFO, WARNING, ERROR, CRITICAL`)
+- DEBUG_ADMISSION: default `false` (set to `true` to log AdmissionReview bodies)
+- DEBUG_PATCHES: default `false` (set to `true` to log generated JSONPatch ops)
 
 ## Notes
 

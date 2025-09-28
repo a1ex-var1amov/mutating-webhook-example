@@ -21,6 +21,9 @@ Configuration (optional via env):
 - TARGET_LABEL_VALUE (default: true)
 - REWRITE_FROM (default: /home)
 - REWRITE_TO (default: /blah/home)
+- LOG_LEVEL (default: INFO) one of DEBUG, INFO, WARNING, ERROR, CRITICAL
+- DEBUG_ADMISSION (default: false) logs incoming AdmissionReview bodies
+- DEBUG_PATCHES (default: false) logs generated JSONPatch operations
 """
 
 import base64
@@ -32,16 +35,32 @@ from typing import Any, Dict, List
 from flask import Flask, jsonify, request
 
 app = Flask(__name__)
-logging.basicConfig(level=logging.INFO)
-
-# Static envelope fields needed in AdmissionReview responses
-BLANK_ADMISSIONREVIEW = {"apiVersion": "admission.k8s.io/v1", "kind": "AdmissionReview"}
 
 # Configurable behavior via environment variables
 LABEL_KEY = os.environ.get("TARGET_LABEL_KEY", "nfs-home")
 LABEL_VALUE = os.environ.get("TARGET_LABEL_VALUE", "true")
 REWRITE_FROM = os.environ.get("REWRITE_FROM", "/home")
 REWRITE_TO = os.environ.get("REWRITE_TO", "/blah/home")
+
+LOG_LEVEL_NAME = os.environ.get("LOG_LEVEL", "INFO").upper()
+_LOG_LEVELS = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "WARN": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
+}
+LOG_LEVEL = _LOG_LEVELS.get(LOG_LEVEL_NAME, logging.INFO)
+DEBUG_ADMISSION = os.environ.get("DEBUG_ADMISSION", "false").lower() in {"1", "true", "yes", "on"}
+DEBUG_PATCHES = os.environ.get("DEBUG_PATCHES", "false").lower() in {"1", "true", "yes", "on"}
+
+# Initialize logging
+logging.basicConfig(level=LOG_LEVEL)
+app.logger.setLevel(LOG_LEVEL)
+
+# Static envelope fields needed in AdmissionReview responses
+BLANK_ADMISSIONREVIEW = {"apiVersion": "admission.k8s.io/v1", "kind": "AdmissionReview"}
 
 
 def has_target_label(obj: Dict[str, Any]) -> bool:
@@ -156,6 +175,12 @@ def mutate():
         if not isinstance(body, dict):
             raise ValueError("Invalid AdmissionReview payload")
 
+        if DEBUG_ADMISSION and app.logger.isEnabledFor(logging.DEBUG):
+            try:
+                app.logger.debug("admission body=%s", json.dumps(body, separators=(",", ":")))
+            except Exception:  # noqa: BLE001
+                pass
+
         req = (body or {}).get("request") or {}
         uid = req.get("uid")
         kind_info = req.get("kind") or {}
@@ -182,6 +207,8 @@ def mutate():
                         obj_meta.get("name"),
                         len(ops),
                     )
+                    if DEBUG_PATCHES and app.logger.isEnabledFor(logging.DEBUG):
+                        app.logger.debug("patch ops=%s", json.dumps(ops, separators=(",", ":")))
                 except Exception:  # noqa: BLE001
                     pass
 
@@ -210,12 +237,15 @@ def main() -> None:
     key_file = os.environ.get("KEY_FILE", "/tls/tls.key")
     port = int(os.environ.get("PORT", "8443"))
     app.logger.info(
-        "Starting webhook on port %s (label %s=%s, rewrite %s -> %s)",
+        "Starting webhook on port %s (label %s=%s, rewrite %s -> %s, loglevel=%s, debugAdmission=%s, debugPatches=%s)",
         port,
         LABEL_KEY,
         LABEL_VALUE,
         REWRITE_FROM,
         REWRITE_TO,
+        LOG_LEVEL_NAME,
+        DEBUG_ADMISSION,
+        DEBUG_PATCHES,
     )
     app.run(host="0.0.0.0", port=port, ssl_context=(cert_file, key_file))
 
