@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nfs-home-webhook
+  namespace: nfs-home-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nfs-home-webhook
+  template:
+    metadata:
+      labels:
+        app: nfs-home-webhook
+    spec:
+      serviceAccountName: nfs-home-webhook
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: webhook
+          image: image-registry.openshift-image-registry.svc:5000/nfs-home-system/nfs-home-webhook:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8443
+              name: https
+          env:
+            - name: CERT_FILE
+              value: /tls/tls.crt
+            - name: KEY_FILE
+              value: /tls/tls.key
+            - name: PORT
+              value: "8443"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: webhook-server-cert

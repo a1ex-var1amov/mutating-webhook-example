@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: nfs-home-webhook
+  namespace: nfs-home-system
+  annotations:
+    service.beta.openshift.io/serving-cert-secret-name: webhook-server-cert
+spec:
+  selector:
+    app: nfs-home-webhook
+  ports:
+    - name: https
+      port: 443
+      targetPort: 8443
