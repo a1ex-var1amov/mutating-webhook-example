@@ -1,6 +1,6 @@
 # nfs-home mutating webhook
 
-This webhook rewrites container volume mount paths from `/home` to `/blah/home/` for Pods and Deployments labeled `nfs-home=true`.
+This webhook rewrites container volume mount paths from `/home` to `/test/home/` for Pods and Deployments labeled `nfs-home=true`.
 
 ## Build
 
@@ -42,7 +42,7 @@ kubectl apply -f k8s/test-pod.yaml
 kubectl -n nfs-home-system get pod nfs-home-test -o json | jq -r '.spec.containers[0].volumeMounts'
 ```
 
-You should see the `mountPath` rewritten from `/home/user` to `/blah/home/user`.
+You should see the `mountPath` rewritten from `/home/user` to `/test/home/user`.
 
 ## Deploy (OpenShift)
 
@@ -88,7 +88,7 @@ oc apply -f k8s/test-pod.yaml
 oc -n nfs-home-system get pod nfs-home-test -o json | jq -r '.spec.containers[0].volumeMounts'
 ```
 
-Expect `mountPath` to be `/blah/home/user` after mutation.
+Expect `mountPath` to be `/test/home/user` after mutation.
 
 ## Configuration
 
@@ -97,10 +97,21 @@ Environment variables supported by the webhook:
 - TARGET_LABEL_KEY: default `nfs-home`
 - TARGET_LABEL_VALUE: default `true`
 - REWRITE_FROM: default `/home`
-- REWRITE_TO: default `/blah/home`
+- REWRITE_TO: default `/test/home`
 - LOG_LEVEL: default `INFO` (one of `DEBUG, INFO, WARNING, ERROR, CRITICAL`)
 - DEBUG_ADMISSION: default `false` (set to `true` to log AdmissionReview bodies)
 - DEBUG_PATCHES: default `false` (set to `true` to log generated JSONPatch ops)
+
+## Examples
+
+Mount path rewrite behavior:
+
+```text
+/home            -> /test/home/
+/home/user       -> /test/home/user
+/home/users/alice-> /test/home/users/alice
+/opt/data        -> (unchanged)
+```
 
 ## Notes
 

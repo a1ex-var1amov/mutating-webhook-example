@@ -1,29 +1,14 @@
 """
-Mutating Admission Webhook: rewrite volume mount paths for certain workloads.
+Mutating Admission Webhook that rewrites container `mountPath` values from
+`REWRITE_FROM` (default: `/home`) to `REWRITE_TO` (default: `/test/home`).
 
-Behavior:
-- Target resources: Pod and Deployment objects that have label `nfs-home=true`.
-- Mutation: Any container volumeMount `mountPath` that is exactly "/home" or starts
-  with "/home/" is rewritten to the equivalent path under "/blah/home".
-  Examples:
-    /home            -> /blah/home/
-    /home/user       -> /blah/home/user
+Scope: Pod and Deployment objects labeled `TARGET_LABEL_KEY=TARGET_LABEL_VALUE`
+(defaults: `nfs-home=true`).
 
-Implementation details:
-- Receives AdmissionReview (v1) requests at /mutate (HTTPS).
-- Computes RFC 6902 JSON Patch operations and base64-encodes the patch in the
-  AdmissionReview response. If no mutation is needed, returns Allowed=true with
-  no patch.
-- Errors fail-open here; use the webhook failurePolicy to control cluster behavior.
-
-Configuration (optional via env):
-- TARGET_LABEL_KEY (default: nfs-home)
-- TARGET_LABEL_VALUE (default: true)
-- REWRITE_FROM (default: /home)
-- REWRITE_TO (default: /blah/home)
-- LOG_LEVEL (default: INFO) one of DEBUG, INFO, WARNING, ERROR, CRITICAL
-- DEBUG_ADMISSION (default: false) logs incoming AdmissionReview bodies
-- DEBUG_PATCHES (default: false) logs generated JSONPatch operations
+Notes:
+- Returns AdmissionReview v1 with optional JSONPatch (RFC 6902) when mutation is needed.
+- Fails open on unexpected errors; tune behavior via the webhook failurePolicy.
+- See README for examples and deployment details.
 """
 
 import base64
@@ -40,7 +25,7 @@ app = Flask(__name__)
 LABEL_KEY = os.environ.get("TARGET_LABEL_KEY", "nfs-home")
 LABEL_VALUE = os.environ.get("TARGET_LABEL_VALUE", "true")
 REWRITE_FROM = os.environ.get("REWRITE_FROM", "/home")
-REWRITE_TO = os.environ.get("REWRITE_TO", "/blah/home")
+REWRITE_TO = os.environ.get("REWRITE_TO", "/test/home")
 
 LOG_LEVEL_NAME = os.environ.get("LOG_LEVEL", "INFO").upper()
 _LOG_LEVELS = {
@@ -77,22 +62,19 @@ def replace_home_path(original_path: str) -> str:
     """Map mount paths from REWRITE_FROM[...] to REWRITE_TO[...].
 
     - Exact REWRITE_FROM (e.g. "/home") becomes REWRITE_TO with a trailing slash
-      (e.g. "/blah/home/") to emphasize directory semantics.
+      (e.g. "/test/home/") to emphasize directory semantics.
     - Any path starting with REWRITE_FROM + "/" is rewritten to start with
       REWRITE_TO (without double slashes).
     - All other paths are returned unchanged.
     """
     from_exact = REWRITE_FROM
-    from_prefix = REWRITE_FROM.rstrip("/") + "/"
     to_base = REWRITE_TO.rstrip("/")
 
     if original_path == from_exact:
         return to_base + "/"
-    if original_path.startswith(from_prefix):
-        suffix = original_path[len(from_prefix) - 1 :][len(from_exact) :]
-        # The slicing above ensures we preserve everything after the REWRITE_FROM
-        # prefix while normalizing slashes at the boundary.
-        return to_base + suffix
+    if original_path.startswith(from_exact.rstrip("/") + "/"):
+        # Preserve the remainder of the path following REWRITE_FROM
+        return to_base + original_path[len(from_exact) :]
     return original_path
 
 
@@ -176,10 +158,7 @@ def mutate():
             raise ValueError("Invalid AdmissionReview payload")
 
         if DEBUG_ADMISSION and app.logger.isEnabledFor(logging.DEBUG):
-            try:
-                app.logger.debug("admission body=%s", json.dumps(body, separators=(",", ":")))
-            except Exception:  # noqa: BLE001
-                pass
+            app.logger.debug("admission body=%s", json.dumps(body, separators=(",", ":"), default=str))
 
         req = (body or {}).get("request") or {}
         uid = req.get("uid")
@@ -196,32 +175,26 @@ def mutate():
                 patch_bytes = json.dumps(ops).encode("utf-8")
                 response["patch"] = base64.b64encode(patch_bytes).decode("utf-8")
                 response["patchType"] = "JSONPatch"
-                try:
-                    obj_meta = obj.get("metadata") or {}
-                    app.logger.info(
-                        "mutation uid=%s kind=%s op=%s ns=%s name=%s patches=%d",
-                        uid,
-                        kind,
-                        operation,
-                        obj_meta.get("namespace"),
-                        obj_meta.get("name"),
-                        len(ops),
-                    )
-                    if DEBUG_PATCHES and app.logger.isEnabledFor(logging.DEBUG):
-                        app.logger.debug("patch ops=%s", json.dumps(ops, separators=(",", ":")))
-                except Exception:  # noqa: BLE001
-                    pass
+                obj_meta = obj.get("metadata") or {}
+                app.logger.info(
+                    "mutation uid=%s kind=%s op=%s ns=%s name=%s patches=%d",
+                    uid,
+                    kind,
+                    operation,
+                    obj_meta.get("namespace"),
+                    obj_meta.get("name"),
+                    len(ops),
+                )
+                if DEBUG_PATCHES and app.logger.isEnabledFor(logging.DEBUG):
+                    app.logger.debug("patch ops=%s", json.dumps(ops, separators=(",", ":"), default=str))
 
         return jsonify({**BLANK_ADMISSIONREVIEW, "response": response})
 
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE002
         app.logger.exception("mutation failed: %s", exc)
         # On failure, fail-open or fail-closed? We'll fail-open here and rely on FailurePolicy in the webhook config.
         fail_uid = None
-        try:
-            fail_uid = ((request.get_json(silent=True) or {}).get("request") or {}).get("uid")
-        except Exception:  # noqa: BLE001
-            pass
+        fail_uid = ((request.get_json(silent=True) or {}).get("request") or {}).get("uid")
         return jsonify({**BLANK_ADMISSIONREVIEW, "response": {"uid": fail_uid, "allowed": True}})
 
 
