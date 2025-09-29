@@ -35,7 +35,14 @@ kubectl apply -f k8s/deployment.yaml
 
 4) Verify
 
-Create a Pod or Deployment with label `nfs-home=true` and a mountPath under `/home`. The webhook will rewrite it to `/blah/home/...`.
+Apply the test Pod and confirm the mutation:
+
+```bash
+kubectl apply -f k8s/test-pod.yaml
+kubectl -n nfs-home-system get pod nfs-home-test -o json | jq -r '.spec.containers[0].volumeMounts'
+```
+
+You should see the `mountPath` rewritten from `/home/user` to `/blah/home/user`.
 
 ## Deploy (OpenShift)
 
@@ -57,6 +64,31 @@ oc start-build nfs-home-webhook --from-dir=. -n nfs-home-system --wait --follow
 # Deploy using the internal registry image reference (no edits needed)
 oc apply -f k8s/deployment-ocp.yaml
 ```
+
+Note:
+
+- Do not run `scripts/generate-certs.sh` on OpenShift. The `service-ca` operator
+  will create the serving cert secret defined by the Service annotation
+  `service.beta.openshift.io/serving-cert-secret-name: webhook-server-cert` and
+  will inject the webhook `caBundle` automatically.
+- If you ever see TLS errors like "certificate signed by unknown authority",
+  delete the secret and re-trigger generation:
+
+  ```bash
+  oc -n nfs-home-system delete secret webhook-server-cert --ignore-not-found
+  oc -n nfs-home-system annotate svc nfs-home-webhook \
+    service.beta.openshift.io/serving-cert-secret-name=webhook-server-cert --overwrite
+  oc -n nfs-home-system rollout restart deploy/nfs-home-webhook
+  ```
+
+### Test on OpenShift
+
+```bash
+oc apply -f k8s/test-pod.yaml
+oc -n nfs-home-system get pod nfs-home-test -o json | jq -r '.spec.containers[0].volumeMounts'
+```
+
+Expect `mountPath` to be `/blah/home/user` after mutation.
 
 ## Configuration
 
